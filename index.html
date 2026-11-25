@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#1e3a8a">
+<meta name="description" content="Daily AVTD RCA comment generator. Runs fully in your browser; your CSV is never uploaded.">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="AVTD RCA">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<title>Delhivery AVTD RCA Generator</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>Delhivery AVTD &rarr; Daily RCA Comment Generator</h1>
+    <div class="header-actions"><span id="fileInfo">No file loaded</span><button type="button" class="theme-btn" id="themeBtn">Dark mode</button></div>
+  </div>
+
+  <div class="dropzone" id="dropzone" data-act="pickFile">
+    <p><strong>Click here or Drag &amp; Drop</strong> your daily <code>avtd_data_YYYY_MM_DD.csv</code> file</p>
+    <p style="font-size:12px;color:#6b7280;">Processed locally in your browser. Nothing is uploaded.</p>
+    <input type="file" id="fileInput" accept=".csv,text/csv" style="display:none">
+  </div>
+
+  <div style="margin:-6px 0 16px;font-size:13px;">
+    <button class="btn" style="background:#6b7280" data-act="pickReturn">+ Add Return report (optional)</button>
+    <span id="retInfo" style="margin-left:8px;color:#6b7280">No return report loaded</span>
+    <input type="file" id="retInput" accept=".csv,text/csv" style="display:none">
+  </div>
+
+  <div id="msgs"></div>
+
+  <div class="controls" id="controls" style="display:none;">
+    <div>
+      <label for="facilitySelect">Facility:</label><br>
+      <select id="facilitySelect" data-act="render"></select>
+    </div>
+    <div class="chk-group">
+      <label><input type="checkbox" id="neOnly" checked data-act="hubs"> NE Hubs Only</label>
+      <label><input type="checkbox" id="groupClient" checked data-act="render"> Group by Client</label>
+      <label><input type="checkbox" id="showExcl" checked data-act="render"> Show Excluded (NTD/Embargo)</label>
+      <label><input type="checkbox" id="rvpInPdt" checked data-act="render"> Count RVP in B2C/Heavy (as in sheet)</label>
+    </div>
+    <div>
+      <label for="wwGap" title="Tabs between each % when pasting into the WW sheet">WW tab gap:</label><br>
+      <input type="number" id="wwGap" value="9" min="1" max="30">
+    </div>
+    <div style="margin-left:auto; display:flex; gap:8px;">
+      <button class="btn" style="background:#25d366" data-act="whatsapp">WhatsApp</button>
+      <button class="btn" data-act="copyAll">Copy All Sections</button>
+      <button class="btn btn-green" data-act="copyWW">Copy WW % Row</button>
+    </div>
+  </div>
+
+  <div id="work" style="display:none;">
+    <div class="tabs" id="tabs">
+      <button type="button" data-t="cards" class="on">RCA Cards</button>
+      <button type="button" data-t="fix">Fix Remarks <span class="cnt ok" id="fixCount">0</span></button>
+      <button type="button" data-t="summary">All-Hubs Summary</button>
+    </div>
+
+    <div id="p-cards">
+      <div class="msg warn alertbar" id="fixAlert" style="display:none;"><span id="fixAlertText"></span><button type="button" class="btn" id="fixAlertBtn" data-act="goFix">Fix Remarks Now &rarr;</button></div>
+      <div class="kpi-strip" id="kpiStrip"></div>
+      <div class="banner" id="recon"></div>
+      <div class="grid" id="outputGrid"></div>
+    </div>
+
+    <div id="p-fix" style="display:none;">
+      <div class="panel">
+        <p class="hint">Type the actual reason for each pending AWB (press Enter to apply). It replaces the system remark in the RCA cards and is remembered on this PC for this file.</p>
+        <datalist id="reasonList"></datalist>
+        <div class="bulk">
+          <select id="bulkRem"></select>
+          <input id="bulkReason" list="reasonList" placeholder="Same reason for all of this remark">
+          <button type="button" class="btn" data-act="bulk">Apply to all</button>
+          <button type="button" class="btn" style="background:#6b7280" data-act="clear">Clear all reasons</button>
+        </div>
+        <div class="chips" id="bulkChips" style="margin:-4px 0 12px;"></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>MWN</th><th>Client</th><th>Section</th><th>System remark</th><th>Actual reason</th><th></th></tr></thead>
+          <tbody id="fixBody"></tbody>
+        </table></div>
+        <details style="margin-top:14px;"><summary style="cursor:pointer;font-size:13px;font-weight:600;">Flagged remarks list (one per line)</summary>
+          <textarea id="flagBox" style="height:130px;margin:8px 0;"></textarea>
+          <button type="button" class="btn" data-act="saveFlags">Save list</button>
+          <button type="button" class="btn" style="background:#6b7280" data-act="resetFlags">Reset to default</button>
+        </details>
+      </div>
+    </div>
+
+    <div id="p-summary" style="display:none;">
+      <div class="panel">
+        <p class="hint">Click a hub to open its RCA cards. Green 90%+, amber 75%+, red below. HAPCI and To fix are counts.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Hub</th><th>B2C</th><th>B2B</th><th>Heavy</th><th>HAPCI</th><th>RVP</th><th>B2B Del</th><th>Heavy Closed</th><th>Prepaid</th><th>COD</th><th>RVP Del</th><th>To fix</th></tr></thead>
+          <tbody id="sumBody"></tbody>
+        </table></div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script src="app.js" defer></script>
+</body>
+</html>
