@@ -79,13 +79,13 @@ $('retInput').addEventListener('change', e => {
 function handleFile(file) {
   $('fileInfo').textContent = `Reading ${file.name}...`;
   fileMsgs = []; hubMsgs = []; paintMsgs();
-  fileKey = 'avtdFix:' + file.name;
+  fileKey = 'avtdFix:' + file.name + ':' + file.size;
   try { fixes = Object.assign(Object.create(null), JSON.parse(store.get(fileKey, '{}'))); } catch (e) { fixes = Object.create(null); }
   if (file.size > 400 * 1024 * 1024) {
     fileMsgs.push({ t: 'err', m: 'This file is larger than 400 MB. Please use the daily AVTD export.' });
     $('fileInfo').textContent = 'No file loaded'; paintMsgs(); return;
   }
-  $('controls').style.display = 'none'; $('recon').style.display = 'none'; $('outputGrid').innerHTML = '';
+  $('controls').style.display = 'none'; $('work').style.display = 'none'; $('recon').style.display = 'none'; $('outputGrid').innerHTML = ''; rows = [];
   if (!/\.csv$/i.test(file.name)) fileMsgs.push({ t: 'warn', m: `"${file.name}" does not end in .csv. Reading it anyway.` });
   const reader = new FileReader();
   reader.onerror = () => { $('fileInfo').textContent = 'No file loaded'; fileMsgs.push({ t: 'err', m: 'Could not read the file. Please try again.' }); paintMsgs(); };
@@ -110,6 +110,8 @@ function handleFile(file) {
       paintMsgs(); return;
     }
     $('controls').style.display = 'flex'; $('work').style.display = 'block';
+    feClosed.clear(); feNslOpen.clear();
+    detectFeCols();
     populateFacilities();
   }, 30);
   reader.readAsText(file);
@@ -145,7 +147,8 @@ function parseCSV(text) {
       pdt, pdtN: norm(pdt), pt, ptN: norm(pt), cat, catN: norm(cat),
       rem, remN: norm(rem), ss, ssN: norm(ss), st, stN: norm(st),
       nsl: get(row, 'NSL_REMARKS') || 'No Remark',
-      nslN: norm(get(row, 'NSL_REMARKS'))
+      nslN: norm(get(row, 'NSL_REMARKS')),
+      x: row
     });
   }
 
@@ -290,7 +293,8 @@ const QUICK_REASONS = ['Consignee Unavailable', 'Consignee refused to accept', '
 let flagged = (() => { try { const s = JSON.parse(store.get('avtdFlagged', 'null')); if (Array.isArray(s) && s.length) return s; } catch (e) {} return DEFAULT_FLAGGED.slice(); })();
 const isFlagged = r => flagged.some(f => norm(f) === norm(r.nsl));
 const TOP_REASONS = ['Consignee Unavailable', 'Delivery Rescheduled by Customer', 'Consignee refused to accept', 'Not attempted'];   // one-tap reasons
-const reasonOf = r => fixes[r.mwn] || r.nsl;   // typed reason wins over the system remark
+const fk = r => r.catN + '|' + r.mwn;   // LM and RVP rows with the same MWN keep separate reasons
+const reasonOf = r => fixes[fk(r)] || r.nsl;   // typed reason wins over the system remark
 const saveFixes = () => store.set(fileKey, JSON.stringify(fixes));
 
 // All pending AWBs of a hub (AVTD pending + delivery pending), each once.
@@ -309,7 +313,7 @@ const segOf = r => (r.catN === 'rvp' ? 'RVP ' : '') + r.pdt + (r.remN === 'pendi
 
 function renderFix(hubRows) {
   const pend = hubPend(hubRows);
-  const todo = pend.filter(r => isFlagged(r) && !fixes[r.mwn]), done = pend.filter(r => fixes[r.mwn]);
+  const todo = pend.filter(r => isFlagged(r) && !fixes[fk(r)]), done = pend.filter(r => fixes[fk(r)]);
   const cnt = $('fixCount'); cnt.textContent = todo.length; cnt.className = 'cnt ' + (todo.length ? 'bad' : 'ok');
   const box = $('fixAlert');
   box.style.display = (todo.length || done.length) ? 'flex' : 'none';
@@ -334,13 +338,13 @@ function renderFix(hubRows) {
   const tb = $('fixBody'); tb.innerHTML = '';
   todo.concat(done).forEach(r => {
     const tr = el('tr'), inp = el('input', 'fix-in');
-    inp.setAttribute('list', 'reasonList'); inp.placeholder = 'Actual reason'; inp.value = fixes[r.mwn] || '';
-    inp.addEventListener('keydown', e => { if (e.key === 'Enter') applyFix(r.mwn, inp.value); });
-    const b = el('button', 'copy-btn', fixes[r.mwn] ? 'Undo' : 'Apply');
-    b.onclick = () => fixes[r.mwn] ? revertFix(r.mwn) : applyFix(r.mwn, inp.value);
+    inp.setAttribute('list', 'reasonList'); inp.placeholder = 'Actual reason'; inp.value = fixes[fk(r)] || '';
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') applyFix(fk(r), inp.value); });
+    const b = el('button', 'copy-btn', fixes[fk(r)] ? 'Undo' : 'Apply');
+    b.onclick = () => fixes[fk(r)] ? revertFix(fk(r)) : applyFix(fk(r), inp.value);
     const ti = el('td'), tbtn = el('td'); ti.appendChild(inp); tbtn.appendChild(b);
     const chips = el('div', 'chips');
-    TOP_REASONS.forEach(t => { const c = el('button', 'chip' + (fixes[r.mwn] === t ? ' on' : ''), t); c.type = 'button'; c.onclick = () => applyFix(r.mwn, t, true); chips.appendChild(c); });
+    TOP_REASONS.forEach(t => { const c = el('button', 'chip' + (fixes[fk(r)] === t ? ' on' : ''), t); c.type = 'button'; c.onclick = () => applyFix(fk(r), t, true); chips.appendChild(c); });
     ti.appendChild(chips);
     tr.append(el('td', '', r.mwn), el('td', '', r.cl), el('td', '', segOf(r)), el('td', '', r.nsl), ti, tbtn);
     tb.appendChild(tr);
@@ -362,7 +366,7 @@ function applyBulk() {
   if (!rem) return toast('No flagged remarks left to update.');
   if (!reason) return toast('Type the actual reason first.');
   let n = 0;
-  hubPend(rows.filter(r => r.cn === $('facilitySelect').value)).forEach(r => { if (isFlagged(r) && r.nsl === rem && !fixes[r.mwn]) { fixes[r.mwn] = reason; n++; } });
+  hubPend(rows.filter(r => r.cn === $('facilitySelect').value)).forEach(r => { if (isFlagged(r) && r.nsl === rem && !fixes[fk(r)]) { fixes[fk(r)] = reason; n++; } });
   saveFixes(); $('bulkReason').value = ''; renderAll(); toast(`Updated ${n} AWB(s)`);
 }
 function clearFixes() {
@@ -377,7 +381,7 @@ function saveFlags() {
 function resetFlags() { flagged = DEFAULT_FLAGGED.slice(); store.set('avtdFlagged', JSON.stringify(flagged)); renderAll(); toast('Flagged list reset'); }
 
 function showTab(t) {
-  ['cards', 'fix', 'summary'].forEach(k => { $('p-' + k).style.display = k === t ? 'block' : 'none'; });
+  ['cards', 'report', 'fix', 'fe', 'summary'].forEach(k => { $('p-' + k).style.display = k === t ? 'block' : 'none'; });
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.t === t));
 }
 $('tabs').addEventListener('click', e => { const b = e.target.closest('button'); if (b) showTab(b.dataset.t); });
@@ -398,7 +402,7 @@ function hubSummary(h) {
   const b2c = by(lm, 'b2c');
   return [a(by(pool, 'b2c')), a(by(pool, 'b2b')), a(by(pool, 'heavy')), String(h.filter(r => r.nslN.startsWith('holdasperclient')).length), a(rv),
     d(by(lm, 'b2b')), d(by(lm, 'heavy')), d(b2c.filter(r => r.ptN === 'prepaid')), d(b2c.filter(r => r.ptN === 'cod')), buildRvpDelSection(rv, false).pct,
-    String(hubPend(h).filter(r => isFlagged(r) && !fixes[r.mwn]).length)];
+    String(hubPend(h).filter(r => isFlagged(r) && !fixes[fk(r)]).length)];
 }
 function renderSummary() {
   const byHub = Object.create(null);
@@ -505,6 +509,272 @@ function renderAll() {
   latestSections = sections;
   renderFix(hub);
   renderSummary();
+  renderReport();
+  renderFe();
+}
+
+
+// ---- One-click hub report & All-Hubs summary report (same layout as the Excel summary sheet) ----
+function buildReportFromRows(label, subRows) {
+  const lm = subRows.filter(r => r.catN === 'lmforward'), rv = subRows.filter(r => r.catN === 'rvp');
+  const pool = $('rvpInPdt').checked ? lm.concat(rv) : lm;
+  const by = (s, p) => s.filter(r => r.pdtN === p);
+  const avtd = s => { const d = s.filter(r => r.remN === 'dispatched').length, p = s.filter(r => r.remN === 'pending').length; return { n: d, d: d + p }; };
+  const del = s => { const d = s.filter(r => r.remN === 'dispatched'); return { n: d.filter(r => r.ssN === 'delivered').length, d: d.length }; };
+  const b2c = by(lm, 'b2c');
+  const D = [['B2C AVTD SL (% LR Dispatched)', avtd(by(pool, 'b2c'))], ['B2B AVTD SL (% LR Dispatched)', avtd(by(pool, 'b2b'))], ['Heavy AVTD SL (% LR Dispatched)', avtd(by(pool, 'heavy'))]];
+  const L = [['Delivered of Dispatch (B2B)', del(by(lm, 'b2b'))], ['Delivered of Dispatch (Prepaid-B2C)', del(b2c.filter(r => r.ptN === 'prepaid'))], ['Delivered of Dispatch (COD-B2C)', del(b2c.filter(r => r.ptN === 'cod'))], ['Delivered of Dispatch (Heavy)', del(by(lm, 'heavy'))]];
+  const sum = a => a.reduce((t, x) => ({ n: t.n + x[1].n, d: t.d + x[1].d }), { n: 0, d: 0 });
+  const p2 = x => pctOf(x.n, x.d);   // whole numbers, same rule as the cards
+  D.push(['Overall Dispatch', sum(D)]); L.push(['Overall Closed', sum(L)]);
+  return { hub: label, disp: D.map(([k, v]) => [k, p2(v)]), del: L.map(([k, v]) => [k, p2(v)]) };
+}
+function buildReport(cn) {
+  return buildReportFromRows(cn.split(' (')[0], rows.filter(r => r.cn === cn));
+}
+function buildAllHubsReport() {
+  const hubList = Array.from($('facilitySelect').options).map(o => o.value);
+  const hubSet = new Set(hubList);
+  const scopeRows = hubSet.size ? rows.filter(r => hubSet.has(r.cn)) : rows;
+  const label = $('neOnly').checked ? `All NE Hubs (${hubSet.size})` : `All Hubs (${hubSet.size})`;
+  return buildReportFromRows(label, scopeRows);
+}
+function reportText(rp) {
+  const t = ['Hub Name :\t' + rp.hub, '', 'Dispatch Performance Metrics'];
+  rp.disp.forEach(([k, v]) => t.push(k + '\t' + v));
+  t.push('', 'Delivery Performance Metrics');
+  rp.del.forEach(([k, v]) => t.push(k + '\t' + v));
+  return t.join('\n');
+}
+function reportHTML(rp) {
+  const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const hd = t => `<tr><td colspan="2" style="background:#dde1f3;font-weight:bold">${esc(t)}</td></tr>`;
+  const rw = ([k, v]) => `<tr><td>${esc(k)}</td><td style="font-weight:bold;text-align:right">${esc(v)}</td></tr>`;
+  return `<table style="border-collapse:collapse;background:#c9e6cf;font-family:Calibri,Arial;font-size:11pt"><tr><td style="font-weight:bold">Hub Name :</td><td style="font-weight:bold">${esc(rp.hub)}</td></tr><tr><td colspan="2">&nbsp;</td></tr>${hd('Dispatch Performance Metrics')}${rp.disp.map(rw).join('')}<tr><td colspan="2">&nbsp;</td></tr>${hd('Delivery Performance Metrics')}${rp.del.map(rw).join('')}</table>`;
+}
+function renderReportCard(panel, heading, rp, onCopy) {
+  panel.innerHTML = '';
+  const head = el('div', 'alertbar'); head.style.marginBottom = '8px';
+  head.append(el('strong', '', heading));
+  const b = el('button', 'copy-btn', 'Copy Report'); b.type = 'button'; b.onclick = onCopy; head.appendChild(b);
+  const tbl = el('table');
+  const add = t => { const tr = el('tr'), td = el('td', 'rep-sec', t); td.colSpan = 2; tr.appendChild(td); tbl.appendChild(tr); };
+  const row = ([k, v]) => { const tr = el('tr'); tr.append(el('td', '', k), el('td', 'rep-val', v)); tbl.appendChild(tr); };
+  add('Dispatch Performance Metrics'); rp.disp.forEach(row);
+  add('Delivery Performance Metrics'); rp.del.forEach(row);
+  const w = el('div', 'table-wrap'); w.appendChild(tbl);
+  panel.append(head, w);
+}
+function copyReportObj(rp, label) {
+  const txt = reportText(rp), html = reportHTML(rp);
+  if (navigator.clipboard && window.ClipboardItem) {
+    navigator.clipboard.write([new ClipboardItem({ 'text/plain': new Blob([txt], { type: 'text/plain' }), 'text/html': new Blob([html], { type: 'text/html' }) })])
+      .then(() => toast(`${label} copied (paste in Excel / WhatsApp)`), () => copyText(txt, `${label} copied`));
+  } else copyText(txt, `${label} copied`);
+}
+function renderReport() {
+  const p = $('reportPanel'), ap = $('allHubsReportPanel');
+  p.innerHTML = ''; ap.innerHTML = '';
+  const cn = $('facilitySelect').value; if (!cn) return;
+  const rp = buildReport(cn);
+  renderReportCard(p, 'Hub Report: ' + rp.hub, rp, copyReport);
+  const arp = buildAllHubsReport();
+  renderReportCard(ap, 'All Hubs Summary Report: ' + arp.hub, arp, copyAllHubsReport);
+}
+function copyReport() {
+  const cn = $('facilitySelect').value; if (!cn) return toast('Nothing to copy yet.');
+  copyReportObj(buildReport(cn), 'Hub report');
+}
+function copyAllHubsReport() {
+  if (!rows.length) return toast('Nothing to copy yet.');
+  copyReportObj(buildAllHubsReport(), 'All hubs summary report');
+}
+
+// ---- FE-wise report (Pending-only Excel-style Pivot: dn -> cs_dwbn -> actual NSL_REMARKS -> Count of mwn) ----
+const FE_GUESS = ['dn','fe','fename','feid','fecode','fu_name','employee','employeename','empname','empid','agent','agentname','deliveryboy','dp','dpname','executive','fieldexecutive','dispatchedby','dispatchby','assignedto','delivery_agent'].map(norm);
+const DWBN_GUESS = ['cs_dwbn','csdwbn','dwbn','dispatchid','runsheet','dispatch_id'].map(norm);
+const feClosed = new Set();
+const feNslOpen = new Set();
+let feDnIdx = -1, feDwbnIdx = -1;
+const cleanId = s => (s || '').trim().replace(/\.0+$/, '');
+const cmpPivot = (a, b) => {
+  if (a === '(Unassigned)' || a === '(blank)') return 1;
+  if (b === '(Unassigned)' || b === '(blank)') return -1;
+  return a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true });
+};
+
+function detectFeCols() {
+  const h = parseInfo ? parseInfo.headers : [];
+  const findCol = guesses => {
+    for (const g of guesses) {
+      const i = h.findIndex(x => norm(x) === g);
+      if (i >= 0) return i;
+    }
+    return -1;
+  };
+  feDnIdx = findCol(FE_GUESS);
+  feDwbnIdx = findCol(DWBN_GUESS);
+}
+
+function buildFePivot(cn) {
+  if (feDnIdx < 0) return null;
+  const hub = rows.filter(r => r.cn === cn);
+  const pendingRows = hubPend(hub);
+  const tree = Object.create(null);
+  pendingRows.forEach(r => {
+    const dn = ((r.x && r.x[feDnIdx]) || '').trim() || '(Unassigned)';
+    const dw = feDwbnIdx >= 0 ? (cleanId(r.x && r.x[feDwbnIdx]) || '(blank)') : '(blank)';
+    const rawNsl = (reasonOf(r) || 'No Remark').trim();
+    const nslKey = rawNsl.toLowerCase();
+    const dObj = tree[dn] || (tree[dn] = { dn, count: 0, dwbns: Object.create(null) });
+    dObj.count++;
+    const wObj = dObj.dwbns[dw] || (dObj.dwbns[dw] = { dwbn: dw, count: 0, nsls: Object.create(null) });
+    wObj.count++;
+    if (!wObj.nsls[nslKey]) wObj.nsls[nslKey] = { key: nslKey, label: rawNsl, count: 0, mwns: [] };
+    wObj.nsls[nslKey].count++;
+    wObj.nsls[nslKey].mwns.push({ mwn: r.mwn, cl: r.cl });
+  });
+  let total = 0;
+  const items = Object.values(tree).sort((a, b) => cmpPivot(a.dn, b.dn)).map(d => {
+    total += d.count;
+    const dwbns = Object.values(d.dwbns).sort((a, b) => cmpPivot(a.dwbn, b.dwbn)).map(w => ({
+      dwbn: w.dwbn,
+      count: w.count,
+      nsls: Object.values(w.nsls).sort((a, b) => cmpPivot(a.label, b.label))
+    }));
+    return { dn: d.dn, count: d.count, dwbns };
+  });
+  return { hub: cn, items, total };
+}
+
+function renderFe() {
+  const cn = $('facilitySelect').value;
+  $('feHubName').textContent = cn || '-';
+  const tb = $('feBody'); tb.innerHTML = '';
+  const data = cn ? buildFePivot(cn) : null;
+  if (!data) {
+    const tr = el('tr'), td = el('td', '', 'Column "dn" was not found in this CSV file.'); td.colSpan = 2; tr.appendChild(td); tb.appendChild(tr); return;
+  }
+  if (!data.items.length) {
+    const tr = el('tr'), td = el('td', '', 'No pending shipments for this hub.'); td.colSpan = 2; tr.appendChild(td); tb.appendChild(tr); return;
+  }
+  data.items.forEach(d => {
+    const dnKey = 'dn:' + d.dn;
+    const dnClosed = feClosed.has(dnKey);
+    const tr = el('tr', 'piv-dn');
+    const td0 = el('td');
+    const btn = el('button', 'piv-btn', dnClosed ? '+' : '−');
+    btn.type = 'button';
+    td0.append(btn, document.createTextNode(d.dn));
+    const tdC = el('td', 'num');
+    tdC.appendChild(el('span', 'piv-pill', String(d.count)));
+    tr.append(td0, tdC);
+    tr.onclick = () => { dnClosed ? feClosed.delete(dnKey) : feClosed.add(dnKey); renderFe(); };
+    tb.appendChild(tr);
+    if (dnClosed) return;
+
+    d.dwbns.forEach(w => {
+      const wKey = 'dw:' + d.dn + '|' + w.dwbn;
+      const wClosed = feClosed.has(wKey);
+      const trW = el('tr', 'piv-dwbn');
+      const td1 = el('td');
+      const btnW = el('button', 'piv-btn', wClosed ? '+' : '−');
+      btnW.type = 'button';
+      td1.append(btnW, el('span', 'piv-tag', 'cs_dwbn'), el('span', 'piv-id', w.dwbn));
+      const tdWC = el('td', 'num');
+      tdWC.appendChild(el('span', 'piv-sub', String(w.count)));
+      trW.append(td1, tdWC);
+      trW.onclick = () => { wClosed ? feClosed.delete(wKey) : feClosed.add(wKey); renderFe(); };
+      tb.appendChild(trW);
+      if (wClosed) return;
+
+      w.nsls.forEach(n => {
+        const nKey = 'nsl:' + d.dn + '|' + w.dwbn + '|' + n.key;
+        const isOpen = feNslOpen.has(nKey);
+        const trN = el('tr', 'piv-nsl' + (isOpen ? ' open' : ''));
+        const tdN = el('td');
+        const btnN = el('button', 'piv-btn', isOpen ? '−' : '+');
+        btnN.type = 'button';
+        tdN.append(btnN, document.createTextNode(n.label));
+        const tdNC = el('td', 'num');
+        tdNC.appendChild(el('span', 'piv-cnt', String(n.count)));
+        trN.append(tdN, tdNC);
+        trN.onclick = () => { isOpen ? feNslOpen.delete(nKey) : feNslOpen.add(nKey); renderFe(); };
+        tb.appendChild(trN);
+
+        if (isOpen) {
+          const trM = el('tr', 'piv-mwn');
+          const tdM = el('td'); tdM.colSpan = 2;
+          const box = el('div', 'mwn-box');
+          n.mwns.forEach(item => {
+            const chip = el('button', 'mwn-chip');
+            chip.type = 'button';
+            chip.title = 'Click to copy MWN';
+            chip.append(document.createTextNode(item.mwn), el('span', 'mwn-cl', item.cl));
+            chip.onclick = e => { e.stopPropagation(); copyText(item.mwn, 'Copied MWN: ' + item.mwn); };
+            box.appendChild(chip);
+          });
+          const cp = el('button', 'mwn-copy', `Copy ${n.mwns.length} MWN${n.mwns.length > 1 ? 's' : ''}`);
+          cp.type = 'button';
+          cp.onclick = e => { e.stopPropagation(); copyText(n.mwns.map(x => x.mwn).join('\n'), `Copied ${n.mwns.length} MWN(s)`); };
+          box.appendChild(cp);
+          tdM.appendChild(box);
+          trM.appendChild(tdM);
+          tb.appendChild(trM);
+        }
+      });
+    });
+  });
+  const trTot = el('tr', 'piv-tot');
+  trTot.append(el('td', '', 'Grand Total'), el('td', 'num', String(data.total)));
+  tb.appendChild(trTot);
+}
+
+function feExpandAll() { feClosed.clear(); renderFe(); }
+function feCollapseAll() {
+  const cn = $('facilitySelect').value;
+  const data = cn ? buildFePivot(cn) : null;
+  if (!data) return;
+  feNslOpen.clear();
+  data.items.forEach(d => feClosed.add('dn:' + d.dn));
+  renderFe();
+}
+
+function copyFe() {
+  const cn = $('facilitySelect').value;
+  const data = cn ? buildFePivot(cn) : null;
+  if (!data || !data.items.length) return toast('Nothing to copy yet.');
+  const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const txtRows = [
+    ['cs_sl', data.hub].join('\t'),
+    '',
+    ['dn', 'cs_dwbn', 'NSL_REMARKS', 'Count of mwn'].join('\t')
+  ];
+  const htmlRows = [
+    `<tr><td style="background:#dbeafe;font-weight:bold;border:1px solid #999">cs_sl</td><td colspan="3" style="background:#f8fafc;font-weight:bold;border:1px solid #999">${esc(data.hub)}</td></tr>`,
+    `<tr><td colspan="4">&nbsp;</td></tr>`,
+    `<tr style="background:#dbeafe;font-weight:bold;text-align:center"><th style="border:1px solid #999">dn</th><th style="border:1px solid #999">cs_dwbn</th><th style="border:1px solid #999">NSL_REMARKS</th><th style="border:1px solid #999">Count of mwn</th></tr>`
+  ];
+  data.items.forEach(d => {
+    txtRows.push([d.dn, '', '', d.count].join('\t'));
+    htmlRows.push(`<tr style="background:#f8fafc;font-weight:bold"><td style="border:1px solid #999">${esc(d.dn)}</td><td style="border:1px solid #999"></td><td style="border:1px solid #999"></td><td style="border:1px solid #999;text-align:center">${d.count}</td></tr>`);
+    d.dwbns.forEach(w => {
+      txtRows.push(['', w.dwbn, '', w.count].join('\t'));
+      htmlRows.push(`<tr style="font-weight:bold"><td style="border:1px solid #999"></td><td style="border:1px solid #999;text-align:center">${esc(w.dwbn)}</td><td style="border:1px solid #999"></td><td style="border:1px solid #999;text-align:center">${w.count}</td></tr>`);
+      w.nsls.forEach(n => { const nsl = n.label, cnt = n.count;
+        txtRows.push(['', '', nsl, cnt].join('\t'));
+        htmlRows.push(`<tr><td style="border:1px solid #999"></td><td style="border:1px solid #999"></td><td style="border:1px solid #999;text-align:center">${esc(nsl)}</td><td style="border:1px solid #999;text-align:center">${cnt}</td></tr>`);
+      });
+    });
+  });
+  txtRows.push(['Grand Total', '', '', data.total].join('\t'));
+  htmlRows.push(`<tr style="background:#dbeafe;font-weight:bold"><td style="border:1px solid #999">Grand Total</td><td style="border:1px solid #999"></td><td style="border:1px solid #999"></td><td style="border:1px solid #999;text-align:center">${data.total}</td></tr>`);
+  const txt = txtRows.join('\n');
+  const html = `<table style="border-collapse:collapse;font-family:Calibri,Arial;font-size:11pt">${htmlRows.join('')}</table>`;
+  if (navigator.clipboard && window.ClipboardItem) {
+    navigator.clipboard.write([new ClipboardItem({ 'text/plain': new Blob([txt], { type: 'text/plain' }), 'text/html': new Blob([html], { type: 'text/html' }) })])
+      .then(() => toast('FE pivot report copied (paste in Excel)'), () => copyText(txt, 'FE pivot report copied'));
+  } else copyText(txt, 'FE pivot report copied');
 }
 
 function copyAll() {
@@ -523,7 +793,9 @@ function copyWWRow() {
 const ACTIONS = {
   pickFile: () => $('fileInput').click(), pickReturn: () => $('retInput').click(),
   render: () => renderAll(), hubs: () => populateFacilities(),
-  whatsapp: () => copyWhatsApp(), copyAll: () => copyAll(), copyWW: () => copyWWRow(), goFix: () => showTab('fix'),
+  whatsapp: () => copyWhatsApp(), copyAll: () => copyAll(), copyWW: () => copyWWRow(), copyReport: () => copyReport(),
+  feExpand: () => feExpandAll(), feCollapse: () => feCollapseAll(),
+  copyFe: () => copyFe(), goFix: () => showTab('fix'),
   bulk: () => applyBulk(), clear: () => clearFixes(), saveFlags: () => saveFlags(), resetFlags: () => resetFlags()
 };
 document.querySelectorAll('[data-act]').forEach(e => {

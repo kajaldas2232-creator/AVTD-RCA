@@ -1,31 +1,16 @@
 {
-  "id": "./",
   "name": "Delhivery AVTD RCA Generator",
   "short_name": "AVTD RCA",
-  "description": "Daily AVTD RCA comment generator. Runs fully in your browser.",
+  "description": "Daily AVTD RCA comment generator. Runs fully in your browser; your CSV is never uploaded.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#0b1020",
+  "orientation": "any",
+  "background_color": "#1e3a8a",
   "theme_color": "#1e3a8a",
   "icons": [
-    {
-      "src": "icon-192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "icon-maskable-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "maskable"
-    }
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ]
 }

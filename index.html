@@ -15,7 +15,7 @@
 <link rel="icon" type="image/png" href="icon-192.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <title>Delhivery AVTD RCA Generator</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=7">
 </head>
 <body>
 <div class="container">
@@ -57,13 +57,16 @@
       <button class="btn" style="background:#25d366" data-act="whatsapp">WhatsApp</button>
       <button class="btn" data-act="copyAll">Copy All Sections</button>
       <button class="btn btn-green" data-act="copyWW">Copy WW % Row</button>
+      <button class="btn" style="background:#7c3aed" data-act="copyReport">Copy Hub Report</button>
     </div>
   </div>
 
   <div id="work" style="display:none;">
     <div class="tabs" id="tabs">
       <button type="button" data-t="cards" class="on">RCA Cards</button>
+      <button type="button" data-t="report">Hub Report</button>
       <button type="button" data-t="fix">Fix Remarks <span class="cnt ok" id="fixCount">0</span></button>
+      <button type="button" data-t="fe">FE-wise Report</button>
       <button type="button" data-t="summary">All-Hubs Summary</button>
     </div>
 
@@ -72,6 +75,13 @@
       <div class="kpi-strip" id="kpiStrip"></div>
       <div class="banner" id="recon"></div>
       <div class="grid" id="outputGrid"></div>
+    </div>
+
+    <div id="p-report" style="display:none;">
+      <div class="report-grid" id="reportGrid">
+        <div class="panel" id="reportPanel"></div>
+        <div class="panel" id="allHubsReportPanel"></div>
+      </div>
     </div>
 
     <div id="p-fix" style="display:none;">
@@ -97,6 +107,23 @@
       </div>
     </div>
 
+    <div id="p-fe" style="display:none;">
+      <div class="panel">
+        <div class="fe-bar">
+          <div class="fe-hub-chip"><span class="fe-hub-k">cs_sl</span><span class="fe-hub-v" id="feHubName">-</span></div>
+          <div class="fe-tools">
+            <button type="button" class="btn" style="background:#6b7280" data-act="feExpand">Expand All</button>
+            <button type="button" class="btn" style="background:#6b7280" data-act="feCollapse">Collapse All</button>
+            <button type="button" class="btn btn-green" data-act="copyFe">Copy FE Report</button>
+          </div>
+        </div>
+        <div class="table-wrap"><table class="fe-pivot">
+          <thead><tr><th>FE (dn) &rsaquo; Dispatch (cs_dwbn) &rsaquo; NSL_REMARKS</th><th class="num">Count of mwn</th></tr></thead>
+          <tbody id="feBody"></tbody>
+        </table></div>
+      </div>
+    </div>
+
     <div id="p-summary" style="display:none;">
       <div class="panel">
         <p class="hint">Click a hub to open its RCA cards. Green 90%+, amber 75%+, red below. HAPCI and To fix are counts.</p>
@@ -110,6 +137,6 @@
 </div>
 <div class="toast" id="toast"></div>
 
-<script src="app.js" defer></script>
+<script src="app.js?v=7" defer></script>
 </body>
 </html>
