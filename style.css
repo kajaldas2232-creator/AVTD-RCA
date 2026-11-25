@@ -183,3 +183,26 @@
   html[data-theme=dark] .mwn-chip { background: #121b2e; border-color: #2a3a5e; color: #e2e8f0; }
   html[data-theme=dark] .mwn-chip:hover { border-color: #60a5fa; background: #1a2744; }
   html[data-theme=dark] .mwn-cl { color: #94a3b8; }
+
+
+/* ---- FE-wise report on phones: fit the screen, no sideways scrolling ---- */
+@media (max-width: 600px) {
+  #p-fe .panel { padding: 12px 8px; }
+  #p-fe .table-wrap { overflow-x: hidden; }
+  .fe-hub-v { word-break: break-word; }
+  .fe-tools .btn { flex: 1 1 auto; text-align: center; }
+  .fe-pivot { table-layout: fixed; width: 100%; }
+  .fe-pivot th, .fe-pivot td { white-space: normal; overflow-wrap: anywhere; padding: 9px 8px; }
+  .fe-pivot th { font-size: 11.5px; padding-top: 9px; padding-bottom: 9px; }
+  .fe-pivot th.num, .fe-pivot td.num { width: 64px; padding-right: 10px; padding-left: 4px; }
+  .fe-pivot tr.piv-dn td:first-child { padding-left: 8px; }
+  .fe-pivot tr.piv-dwbn td:first-child { padding-left: 18px; }
+  .fe-pivot tr.piv-nsl td:first-child { padding-left: 30px; }
+  .fe-pivot tr.piv-mwn td { padding: 8px 8px 12px 30px; }
+  .piv-btn { width: 22px; height: 22px; margin-right: 7px; font-size: 13px; }
+  .piv-tag { margin-right: 5px; padding: 2px 5px; }
+  .piv-id { font-size: 12.5px; }
+  .mwn-chip { font-size: 12.5px; padding: 5px 9px; }
+  .mwn-copy { margin-left: 0; width: 100%; padding: 8px 10px; font-size: 12.5px; }
+  .lg-only { display: none; }
+}

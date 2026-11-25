@@ -54,75 +54,28 @@ dropzone.addEventListener('drop', e => {
 });
 fileInput.addEventListener('change', e => { if (e.target.files.length) handleFile(e.target.files[0]); fileInput.value = ''; });
 
-// Optional return report (same CSV layout assumed; shows which columns are missing if it differs).
-$('retInput').addEventListener('change', e => {
-  const file = e.target.files[0]; e.target.value = '';
-  if (!file) return;
-  const rd = new FileReader();
-  rd.onerror = () => toast('Could not read the return file.');
-  rd.onload = evt => setTimeout(() => {
-    const res = parseCSV(evt.target.result);
-    fileMsgs = fileMsgs.filter(m => !m.m.startsWith('Return report'));
-    if (res.missing.length) {
-      retRows = []; $('retInfo').textContent = 'Return report not usable';
-      fileMsgs.push({ t: 'err', m: `Return report: missing column(s) ${res.missing.join(', ')}. Columns found: ${res.headers.slice(0, 40).join(', ')}` });
-      paintMsgs(); return;
-    }
-    retRows = res.rows;
-    $('retInfo').textContent = `${file.name} (${retRows.length.toLocaleString()} Today AVTD rows)`;
-    paintMsgs();
-    if (rows.length) renderAll();
-  }, 30);
-  rd.readAsText(file);
+// ---- Reading big CSV files safely (phones run out of memory if a 600 MB file is loaded as one string) ----
+// The file is read in 8 MB pieces, parsed row by row, and only the rows we need are kept.
+let busy = false;
+const MAX_FILE = 2 * 1024 * 1024 * 1024;
+const CHUNK = 8 * 1024 * 1024;
+const pctText = f => Math.round(f * 100) + '%';
+const readSlice = (file, a, b) => new Promise((res, rej) => {
+  const fr = new FileReader();
+  fr.onload = () => res(fr.result); fr.onerror = () => rej(fr.error || new Error('read failed'));
+  fr.readAsArrayBuffer(file.slice(a, b));
 });
+// Copy a string so a kept value does not keep the whole 8 MB chunk it was cut from alive in memory.
+const own = s => s ? (' ' + s).slice(1) : s;
 
-function handleFile(file) {
-  $('fileInfo').textContent = `Reading ${file.name}...`;
-  fileMsgs = []; hubMsgs = []; paintMsgs();
-  fileKey = 'avtdFix:' + file.name + ':' + file.size;
-  try { fixes = Object.assign(Object.create(null), JSON.parse(store.get(fileKey, '{}'))); } catch (e) { fixes = Object.create(null); }
-  if (file.size > 400 * 1024 * 1024) {
-    fileMsgs.push({ t: 'err', m: 'This file is larger than 400 MB. Please use the daily AVTD export.' });
-    $('fileInfo').textContent = 'No file loaded'; paintMsgs(); return;
-  }
-  $('controls').style.display = 'none'; $('work').style.display = 'none'; $('recon').style.display = 'none'; $('outputGrid').innerHTML = ''; rows = [];
-  if (!/\.csv$/i.test(file.name)) fileMsgs.push({ t: 'warn', m: `"${file.name}" does not end in .csv. Reading it anyway.` });
-  const reader = new FileReader();
-  reader.onerror = () => { $('fileInfo').textContent = 'No file loaded'; fileMsgs.push({ t: 'err', m: 'Could not read the file. Please try again.' }); paintMsgs(); };
-  reader.onload = evt => setTimeout(() => {
-    const t0 = performance.now();
-    parseInfo = parseCSV(evt.target.result);
-    rows = parseInfo.rows;
-    const secs = ((performance.now() - t0) / 1000).toFixed(1);
-    if (parseInfo.missing.length) {
-      fileMsgs.push({ t: 'err', m: `Missing required column(s): ${parseInfo.missing.join(', ')}. Check that this is the AVTD export and the headers were not renamed.` });
-      $('fileInfo').textContent = file.name; paintMsgs(); return;
-    }
-    const ignored = parseInfo.total - rows.length;
-    if (ignored > 0) {
-      const other = Object.entries(parseInfo.flags).filter(([k]) => norm(k) !== 'todayavtd').map(([k, v]) => `${k || '(blank)'}: ${v}`).join(', ');
-      fileMsgs.push({ t: 'info', m: `${ignored.toLocaleString()} rows ignored because AVTD_Cut_off_flag is not "Today AVTD" (${other}).` });
-    }
-    $('fileInfo').textContent = `${file.name} (${rows.length.toLocaleString()} Today AVTD rows of ${parseInfo.total.toLocaleString()}, read in ${secs}s)`;
-    if (!rows.length) {
-      const seen = Object.keys(parseInfo.flags).map(k => k || '(blank)').join(', ');
-      fileMsgs.push({ t: 'err', m: `No "Today AVTD" rows found. Flag values in this file: ${seen || 'none'}.` });
-      paintMsgs(); return;
-    }
-    $('controls').style.display = 'flex'; $('work').style.display = 'block';
-    feClosed.clear(); feNslOpen.clear();
-    detectFeCols();
-    populateFacilities();
-  }, 30);
-  reader.readAsText(file);
-}
-
-function parseCSV(text) {
-  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
-  const out = { rows: [], total: 0, flags: Object.create(null), missing: [], headers: [] };
-  let headers = null, stop = false;
+function createParser(opts) {
+  opts = opts || {};
+  const out = { rows: [], total: 0, flags: Object.create(null), missing: [], headers: [], hasFe: false };
+  let headers = null, stop = false, carry = '', started = false;
   const idx = {};
-  const get = (row, k) => idx[k] < 0 ? '' : (row[idx[k]] || '').trim();
+  let feDn = -1, feDw = -1;
+  const get = (row, k) => idx[k] < 0 ? '' : own((row[idx[k]] || '').trim());
+  const findCol = guesses => { for (const g of guesses) { const i = headers.indexOf(g); if (i >= 0) return i; } return -1; };
 
   function onRow(row) {
     if (row.length === 1 && !row[0]) return;
@@ -132,6 +85,7 @@ function parseCSV(text) {
       NEEDED.forEach(k => idx[k] = headers.indexOf(norm(k)));
       out.missing = NEEDED.filter(k => idx[k] < 0);
       if (out.missing.length) stop = true;
+      if (opts.fe) { feDn = findCol(FE_GUESS); feDw = findCol(DWBN_GUESS); out.hasFe = feDn >= 0; }
       return;
     }
     if (row.length <= 5) return;
@@ -140,46 +94,156 @@ function parseCSV(text) {
     if (flag in out.flags || Object.keys(out.flags).length < 20) out.flags[flag] = (out.flags[flag] || 0) + 1;
     if (norm(flag) !== 'todayavtd') return;
     const pdt = get(row, 'pdt'), pt = get(row, 'pt'), cat = get(row, 'AVTD_Cat'), rem = get(row, 'Main_Remarks'), ss = get(row, 'ss'), st = get(row, 'st');
-    out.rows.push({
-      mwn: get(row, 'mwn').replace(/^`+/, '').trim(),
+    const nslRaw = get(row, 'NSL_REMARKS');
+    const o = {
+      mwn: own(get(row, 'mwn').replace(/^`+/, '').trim()),
       cl: get(row, 'cl') || 'Unknown',
       cn: get(row, 'cn'),
       pdt, pdtN: norm(pdt), pt, ptN: norm(pt), cat, catN: norm(cat),
       rem, remN: norm(rem), ss, ssN: norm(ss), st, stN: norm(st),
-      nsl: get(row, 'NSL_REMARKS') || 'No Remark',
-      nslN: norm(get(row, 'NSL_REMARKS')),
-      x: row
-    });
+      nsl: nslRaw || 'No Remark',
+      nslN: norm(nslRaw),
+      dn: feDn >= 0 ? own((row[feDn] || '').trim()) : '',
+      dw: feDw >= 0 ? own((row[feDw] || '').trim()) : ''
+    };
+    if (opts.keep && !opts.keep(o)) return;
+    out.rows.push(o);
   }
 
-  const n = text.length;
-  let i = 0, row = [];
-  const end = () => { onRow(row); row = []; };
-  while (i < n && !stop) {
-    let f;
-    if (text.charCodeAt(i) === 34) {            // quoted field
-      let j = i + 1, s = '';
-      for (;;) {
-        const k = text.indexOf('"', j);
-        if (k < 0) { s += text.slice(j); j = n; break; }
-        s += text.slice(j, k);
-        if (text.charCodeAt(k + 1) === 34) { s += '"'; j = k + 2; } else { j = k + 1; break; }
+  // text must hold whole rows only (it ends on a row boundary).
+  function parseText(text) {
+    const n = text.length;
+    let i = 0, row = [];
+    const end = () => { onRow(row); row = []; };
+    while (i < n && !stop) {
+      let f;
+      if (text.charCodeAt(i) === 34) {            // quoted field
+        let j = i + 1, s = '';
+        for (;;) {
+          const k = text.indexOf('"', j);
+          if (k < 0) { s += text.slice(j); j = n; break; }
+          s += text.slice(j, k);
+          if (text.charCodeAt(k + 1) === 34) { s += '"'; j = k + 2; } else { j = k + 1; break; }
+        }
+        f = s; i = j;
+        while (i < n) { const c = text.charCodeAt(i); if (c === 44 || c === 10 || c === 13) break; i++; }
+      } else {                                    // plain field
+        let j = i;
+        while (j < n) { const c = text.charCodeAt(j); if (c === 44 || c === 10 || c === 13) break; j++; }
+        f = text.slice(i, j); i = j;
       }
-      f = s; i = j;
-      while (i < n) { const c = text.charCodeAt(i); if (c === 44 || c === 10 || c === 13) break; i++; }
-    } else {                                    // plain field
-      let j = i;
-      while (j < n) { const c = text.charCodeAt(j); if (c === 44 || c === 10 || c === 13) break; j++; }
-      f = text.slice(i, j); i = j;
+      row.push(f);
+      if (i >= n) { end(); break; }               // last row without a trailing newline
+      const c = text.charCodeAt(i);
+      if (c === 44) { i++; if (i >= n) { row.push(''); end(); } continue; }
+      i += (c === 13 && text.charCodeAt(i + 1) === 10) ? 2 : 1;
+      end();
     }
-    row.push(f);
-    if (i >= n) { end(); break; }               // last row without a trailing newline
-    const c = text.charCodeAt(i);
-    if (c === 44) { i++; if (i >= n) { row.push(''); end(); } continue; }
-    i += (c === 13 && text.charCodeAt(i + 1) === 10) ? 2 : 1;
-    end();
   }
-  return out;
+
+  // Feed the next piece of the file. Only complete rows are parsed; the unfinished tail waits for the next piece.
+  function push(piece, final) {
+    if (stop) return;
+    let t = carry + piece; carry = '';
+    if (!started && t.length) { started = true; if (t.charCodeAt(0) === 0xFEFF) t = t.slice(1); }
+    if (final) { parseText(t); return; }
+    // Last newline that is not inside a quoted field (an even number of quotes before it).
+    let par = 0, last = -1, pos = 0;
+    for (;;) {
+      const q = t.indexOf('"', pos), segEnd = q < 0 ? t.length : q;
+      if (par === 0 && segEnd > pos) { const nl = t.lastIndexOf('\n', segEnd - 1); if (nl >= pos) last = nl; }
+      if (q < 0) break;
+      par ^= 1; pos = q + 1;
+    }
+    if (last < 0) { carry = t; return; }
+    parseText(t.slice(0, last + 1));
+    carry = t.slice(last + 1);
+  }
+  return { push, out, stopped: () => stop };
+}
+
+async function parseFile(file, opts, onProgress) {
+  const p = createParser(opts), dec = new TextDecoder('utf-8');
+  for (let off = 0; off < file.size && !p.stopped(); off += CHUNK) {
+    const end = Math.min(off + CHUNK, file.size);
+    p.push(dec.decode(await readSlice(file, off, end), { stream: true }), false);
+    if (onProgress) onProgress(end / file.size);
+    await new Promise(r => setTimeout(r, 0));     // let the page repaint and stay responsive
+  }
+  p.push(dec.decode(), true);
+  return p.out;
+}
+
+// Optional return report (same CSV layout assumed; only B2B Today AVTD rows are kept, so even a very big file stays light).
+$('retInput').addEventListener('change', async e => {
+  const file = e.target.files[0]; e.target.value = '';
+  if (!file) return;
+  if (busy) return toast('Still reading a file. Please wait.');
+  fileMsgs = fileMsgs.filter(m => !m.m.startsWith('Return report'));
+  if (file.size > MAX_FILE) { fileMsgs.push({ t: 'err', m: 'Return report: this file is larger than 2 GB.' }); paintMsgs(); return; }
+  busy = true;
+  let res;
+  try {
+    res = await parseFile(file, { keep: r => r.pdtN === 'b2b' }, f => { $('retInfo').textContent = `Reading ${file.name}... ${pctText(f)}`; });
+  } catch (err) {
+    busy = false; $('retInfo').textContent = 'Return report could not be read';
+    fileMsgs.push({ t: 'err', m: 'Return report: could not read the file (the browser may have run out of memory). Try a smaller export or a laptop browser.' });
+    paintMsgs(); return;
+  }
+  busy = false;
+  if (res.missing.length) {
+    retRows = []; $('retInfo').textContent = 'Return report not usable';
+    fileMsgs.push({ t: 'err', m: `Return report: missing column(s) ${res.missing.join(', ')}. Columns found: ${res.headers.slice(0, 40).join(', ')}` });
+    paintMsgs(); return;
+  }
+  retRows = res.rows;
+  $('retInfo').textContent = `${file.name} (${retRows.length.toLocaleString()} B2B Today AVTD rows of ${res.total.toLocaleString()})`;
+  paintMsgs();
+  if (rows.length) renderAll();
+});
+
+async function handleFile(file) {
+  if (busy) return toast('Still reading a file. Please wait.');
+  $('fileInfo').textContent = `Reading ${file.name}...`;
+  fileMsgs = []; hubMsgs = []; paintMsgs();
+  fileKey = 'avtdFix:' + file.name + ':' + file.size;
+  try { fixes = Object.assign(Object.create(null), JSON.parse(store.get(fileKey, '{}'))); } catch (e) { fixes = Object.create(null); }
+  if (file.size > MAX_FILE) {
+    fileMsgs.push({ t: 'err', m: 'This file is larger than 2 GB. Please use the daily AVTD export.' });
+    $('fileInfo').textContent = 'No file loaded'; paintMsgs(); return;
+  }
+  $('controls').style.display = 'none'; $('work').style.display = 'none'; $('recon').style.display = 'none'; $('outputGrid').innerHTML = ''; rows = [];
+  if (!/\.csv$/i.test(file.name)) fileMsgs.push({ t: 'warn', m: `"${file.name}" does not end in .csv. Reading it anyway.` });
+  busy = true;
+  const t0 = performance.now();
+  try {
+    parseInfo = await parseFile(file, { fe: true }, f => { $('fileInfo').textContent = `Reading ${file.name}... ${pctText(f)}`; });
+  } catch (err) {
+    busy = false; $('fileInfo').textContent = 'No file loaded';
+    fileMsgs.push({ t: 'err', m: 'Could not read the file (the browser may have run out of memory). Try again, or use a laptop browser for very large files.' });
+    paintMsgs(); return;
+  }
+  busy = false;
+  rows = parseInfo.rows;
+  const secs = ((performance.now() - t0) / 1000).toFixed(1);
+  if (parseInfo.missing.length) {
+    fileMsgs.push({ t: 'err', m: `Missing required column(s): ${parseInfo.missing.join(', ')}. Check that this is the AVTD export and the headers were not renamed.` });
+    $('fileInfo').textContent = file.name; paintMsgs(); return;
+  }
+  const ignored = parseInfo.total - rows.length;
+  if (ignored > 0) {
+    const other = Object.entries(parseInfo.flags).filter(([k]) => norm(k) !== 'todayavtd').map(([k, v]) => `${k || '(blank)'}: ${v}`).join(', ');
+    fileMsgs.push({ t: 'info', m: `${ignored.toLocaleString()} rows ignored because AVTD_Cut_off_flag is not "Today AVTD" (${other}).` });
+  }
+  $('fileInfo').textContent = `${file.name} (${rows.length.toLocaleString()} Today AVTD rows of ${parseInfo.total.toLocaleString()}, read in ${secs}s)`;
+  if (!rows.length) {
+    const seen = Object.keys(parseInfo.flags).map(k => k || '(blank)').join(', ');
+    fileMsgs.push({ t: 'err', m: `No "Today AVTD" rows found. Flag values in this file: ${seen || 'none'}.` });
+    paintMsgs(); return;
+  }
+  $('controls').style.display = 'flex'; $('work').style.display = 'block';
+  feClosed.clear(); feNslOpen.clear();
+  populateFacilities();
 }
 
 function populateFacilities() {
@@ -595,7 +659,6 @@ const FE_GUESS = ['dn','fe','fename','feid','fecode','fu_name','employee','emplo
 const DWBN_GUESS = ['cs_dwbn','csdwbn','dwbn','dispatchid','runsheet','dispatch_id'].map(norm);
 const feClosed = new Set();
 const feNslOpen = new Set();
-let feDnIdx = -1, feDwbnIdx = -1;
 const cleanId = s => (s || '').trim().replace(/\.0+$/, '');
 const cmpPivot = (a, b) => {
   if (a === '(Unassigned)' || a === '(blank)') return 1;
@@ -603,27 +666,14 @@ const cmpPivot = (a, b) => {
   return a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true });
 };
 
-function detectFeCols() {
-  const h = parseInfo ? parseInfo.headers : [];
-  const findCol = guesses => {
-    for (const g of guesses) {
-      const i = h.findIndex(x => norm(x) === g);
-      if (i >= 0) return i;
-    }
-    return -1;
-  };
-  feDnIdx = findCol(FE_GUESS);
-  feDwbnIdx = findCol(DWBN_GUESS);
-}
-
 function buildFePivot(cn) {
-  if (feDnIdx < 0) return null;
+  if (!parseInfo || !parseInfo.hasFe) return null;
   const hub = rows.filter(r => r.cn === cn);
   const pendingRows = hubPend(hub);
   const tree = Object.create(null);
   pendingRows.forEach(r => {
-    const dn = ((r.x && r.x[feDnIdx]) || '').trim() || '(Unassigned)';
-    const dw = feDwbnIdx >= 0 ? (cleanId(r.x && r.x[feDwbnIdx]) || '(blank)') : '(blank)';
+    const dn = (r.dn || '').trim() || '(Unassigned)';
+    const dw = cleanId(r.dw) || '(blank)';
     const rawNsl = (reasonOf(r) || 'No Remark').trim();
     const nslKey = rawNsl.toLowerCase();
     const dObj = tree[dn] || (tree[dn] = { dn, count: 0, dwbns: Object.create(null) });
