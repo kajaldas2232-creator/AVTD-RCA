@@ -256,3 +256,35 @@ html[data-theme=dark] .dropzone .dz-note { color: #94a3b8; }
   .header-actions #fileInfo { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
   .header-actions .theme-btn { flex: none; }
 }
+
+
+/* ---- Preset reasons dropdown for FE Notes ---- */
+#p-fe .table-wrap, .fe-pivot { overflow: visible; }
+.note-wrap { position: relative; min-width: 0; width: 100%; }
+.note-wrap .mwn-note { width: 100%; padding-right: 30px; }
+.note-caret {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  width: 24px; height: 24px; border: none; background: transparent;
+  color: #64748b; font-size: 14px; line-height: 1; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.note-caret:hover { color: #1e3a8a; }
+.note-menu {
+  display: none; position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 30;
+  background: #fff; border: 1px solid #cbd5e1; border-radius: 8px;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.14); overflow: hidden;
+}
+.note-wrap.open .note-menu { display: block; }
+.note-opt {
+  display: block; width: 100%; text-align: left; padding: 8px 12px;
+  border: none; border-bottom: 1px solid #f1f5f9; background: transparent;
+  color: #0f172a; font-size: 13px; cursor: pointer; font-family: inherit;
+}
+.note-opt:last-child { border-bottom: none; }
+.note-opt:hover { background: #eff6ff; color: #1e40af; }
+
+html[data-theme=dark] .note-caret { color: #94a3b8; }
+html[data-theme=dark] .note-caret:hover { color: #93c5fd; }
+html[data-theme=dark] .note-menu { background: #121826; border-color: #2a3a5e; box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45); }
+html[data-theme=dark] .note-opt { color: #e2e8f0; border-bottom-color: #1e293b; }
+html[data-theme=dark] .note-opt:hover { background: #1e2946; color: #93c5fd; }

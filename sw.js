@@ -1,5 +1,5 @@
 // Network-first: you always get the newest version when online; the cached copy is used offline.
-const CACHE = 'avtd-rca-v12';
+const CACHE = 'avtd-rca-v13';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'icon-512-maskable.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', e => {

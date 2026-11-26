@@ -633,6 +633,13 @@ const feClosed = new Set();
 const feNslOpen = new Set();
 // Personal notes per MWN (saved in this browser only, kept 45 days so a note follows the shipment into the next day's file).
 const NOTE_KEY = 'avtdNotes', NOTE_TTL = 45 * 86400000;
+const NOTE_REASONS = [
+  'Delivery Rescheduled',
+  'CX not responding the call',
+  'Switch off',
+  'CX refused to accept',
+  'Incoming not available'
+];
 const notes = (() => {
   const out = Object.create(null);
   try { const o = JSON.parse(store.get(NOTE_KEY, '{}')), now = Date.now(); for (const k in o) if (o[k] && o[k].n && now - o[k].t < NOTE_TTL) out[k] = o[k]; } catch (e) {}
@@ -757,16 +764,61 @@ function renderFe() {
             chip.title = 'Click to copy MWN';
             chip.append(document.createTextNode(item.mwn), el('span', 'mwn-cl', item.cl));
             chip.onclick = e => { e.stopPropagation(); copyText(item.mwn, 'Copied MWN: ' + item.mwn); };
+            const wrap = el('div', 'note-wrap');
             const inp = el('input', 'mwn-note');
-            inp.type = 'text'; inp.placeholder = 'Add note / remarks...'; inp.maxLength = 300;
+            inp.type = 'text'; inp.placeholder = 'Select or type note...'; inp.maxLength = 300;
             inp.autocomplete = 'off'; inp.enterKeyHint = 'done';
             inp.setAttribute('aria-label', 'Note for ' + item.mwn);
             inp.value = noteOf(item.mwn);
-            inp.onclick = e => e.stopPropagation();
-            inp.oninput = () => { setNote(item.mwn, inp.value); inp.classList.toggle('has', !!inp.value.trim()); refreshDot(); };
-            inp.onkeydown = e => { if (e.key === 'Enter') inp.blur(); };
             inp.classList.toggle('has', !!inp.value.trim());
-            line.append(chip, inp);
+
+            const caret = el('button', 'note-caret', '\u25BE');
+            caret.type = 'button';
+            caret.setAttribute('aria-label', 'Show preset reasons');
+
+            const menu = el('div', 'note-menu');
+            const saveVal = val => {
+              inp.value = val;
+              setNote(item.mwn, val);
+              inp.classList.toggle('has', !!val.trim());
+              refreshDot();
+            };
+            const closeAllMenus = () => document.querySelectorAll('.note-wrap.open').forEach(w => w.classList.remove('open'));
+            const openMenu = () => { closeAllMenus(); wrap.classList.add('open'); };
+
+            NOTE_REASONS.forEach(reason => {
+              const opt = el('button', 'note-opt', reason);
+              opt.type = 'button';
+              const pick = e => {
+                e.preventDefault();
+                e.stopPropagation();
+                saveVal(reason);
+                wrap.classList.remove('open');
+              };
+              opt.onmousedown = pick;
+              opt.onclick = pick;
+              menu.appendChild(opt);
+            });
+
+            inp.onclick = e => { e.stopPropagation(); openMenu(); };
+            inp.onfocus = () => openMenu();
+            inp.oninput = () => saveVal(inp.value);
+            inp.onkeydown = e => {
+              if (e.key === 'Enter' || e.key === 'Escape') { wrap.classList.remove('open'); inp.blur(); }
+            };
+            inp.onblur = () => setTimeout(() => wrap.classList.remove('open'), 150);
+
+            caret.onmousedown = e => {
+              e.preventDefault();
+              e.stopPropagation();
+              const isOpen = wrap.classList.contains('open');
+              closeAllMenus();
+              if (!isOpen) { wrap.classList.add('open'); inp.focus(); }
+            };
+            caret.onclick = e => e.stopPropagation();
+
+            wrap.append(inp, caret, menu);
+            line.append(chip, wrap);
             box.appendChild(line);
           });
           const cp = el('button', 'mwn-copy', `Copy ${n.mwns.length} MWN${n.mwns.length > 1 ? 's' : ''}`);
