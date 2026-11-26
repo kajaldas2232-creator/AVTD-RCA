@@ -21,7 +21,7 @@ const $ = id => document.getElementById(id);
 const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt !== undefined) e.textContent = txt; return e; };
 // Lowercase and drop spaces, _ and - so "Pre-paid", "prepaid " and "PREPAID" all match.
 const norm = s => (s || '').toLowerCase().replace(/[\s_\-]+/g, '');
-let rows = [], retRows = [], parseInfo = null, fileMsgs = [], hubMsgs = [], latestPct = [], latestSections = [], fixes = Object.create(null), fileKey = '';
+let rows = [], parseInfo = null, fileMsgs = [], hubMsgs = [], latestPct = [], latestSections = [], fixes = Object.create(null), fileKey = '';
 
 function paintMsgs() {
   const box = $('msgs'); box.innerHTML = '';
@@ -46,6 +46,7 @@ function copyText(txt, okMsg) {
 }
 
 const dropzone = $('dropzone'), fileInput = $('fileInput');
+dropzone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); } });
 dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('dragover'); });
 dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
 dropzone.addEventListener('drop', e => {
@@ -106,7 +107,6 @@ function createParser(opts) {
       dn: feDn >= 0 ? own((row[feDn] || '').trim()) : '',
       dw: feDw >= 0 ? own((row[feDw] || '').trim()) : ''
     };
-    if (opts.keep && !opts.keep(o)) return;
     out.rows.push(o);
   }
 
@@ -174,34 +174,6 @@ async function parseFile(file, opts, onProgress) {
   return p.out;
 }
 
-// Optional return report (same CSV layout assumed; only B2B Today AVTD rows are kept, so even a very big file stays light).
-$('retInput').addEventListener('change', async e => {
-  const file = e.target.files[0]; e.target.value = '';
-  if (!file) return;
-  if (busy) return toast('Still reading a file. Please wait.');
-  fileMsgs = fileMsgs.filter(m => !m.m.startsWith('Return report'));
-  if (file.size > MAX_FILE) { fileMsgs.push({ t: 'err', m: 'Return report: this file is larger than 2 GB.' }); paintMsgs(); return; }
-  busy = true;
-  let res;
-  try {
-    res = await parseFile(file, { keep: r => r.pdtN === 'b2b' }, f => { $('retInfo').textContent = `Reading ${file.name}... ${pctText(f)}`; });
-  } catch (err) {
-    busy = false; $('retInfo').textContent = 'Return report could not be read';
-    fileMsgs.push({ t: 'err', m: 'Return report: could not read the file (the browser may have run out of memory). Try a smaller export or a laptop browser.' });
-    paintMsgs(); return;
-  }
-  busy = false;
-  if (res.missing.length) {
-    retRows = []; $('retInfo').textContent = 'Return report not usable';
-    fileMsgs.push({ t: 'err', m: `Return report: missing column(s) ${res.missing.join(', ')}. Columns found: ${res.headers.slice(0, 40).join(', ')}` });
-    paintMsgs(); return;
-  }
-  retRows = res.rows;
-  $('retInfo').textContent = `${file.name} (${retRows.length.toLocaleString()} B2B Today AVTD rows of ${res.total.toLocaleString()})`;
-  paintMsgs();
-  if (rows.length) renderAll();
-});
-
 async function handleFile(file) {
   if (busy) return toast('Still reading a file. Please wait.');
   $('fileInfo').textContent = `Reading ${file.name}...`;
@@ -212,7 +184,7 @@ async function handleFile(file) {
     fileMsgs.push({ t: 'err', m: 'This file is larger than 2 GB. Please use the daily AVTD export.' });
     $('fileInfo').textContent = 'No file loaded'; paintMsgs(); return;
   }
-  $('controls').style.display = 'none'; $('work').style.display = 'none'; $('recon').style.display = 'none'; $('outputGrid').innerHTML = ''; rows = [];
+  dropzone.classList.remove('loaded'); $('controls').style.display = 'none'; $('work').style.display = 'none'; $('recon').style.display = 'none'; $('outputGrid').innerHTML = ''; rows = [];
   if (!/\.csv$/i.test(file.name)) fileMsgs.push({ t: 'warn', m: `"${file.name}" does not end in .csv. Reading it anyway.` });
   busy = true;
   const t0 = performance.now();
@@ -241,6 +213,7 @@ async function handleFile(file) {
     fileMsgs.push({ t: 'err', m: `No "Today AVTD" rows found. Flag values in this file: ${seen || 'none'}.` });
     paintMsgs(); return;
   }
+  dropzone.classList.add('loaded');
   $('controls').style.display = 'flex'; $('work').style.display = 'block';
   feClosed.clear(); feNslOpen.clear();
   populateFacilities();
@@ -515,7 +488,6 @@ function renderAll() {
     hvy: buildAVTDSection('Heavy AVTD SL (% LR Dispatched)', by(pool, 'heavy'), gbc, showEx),
     hapci: buildHapci(hub, gbc),
     rvp: buildAVTDSection('RVP AVTD SL (% Dispatched)', rvp, gbc, showEx),
-    ret: retRows.length ? buildAVTDSection('B2B Return AVTD SL (% Dispatched)', retRows.filter(r => r.cn === cn && r.pdtN === 'b2b'), gbc, showEx) : null,
     dB2b: buildDelSection('% Delivered of Dispatch (B2B)', b2b, false, gbc),
     dHvy: buildDelSection('% Closed of Dispatch (Heavy)', heavy, false, gbc),
     dPre: buildDelSection('% Delivered of Dispatch (Pre-paid B2C)', b2c.filter(r => r.ptN === 'prepaid'), false, gbc),
@@ -523,7 +495,7 @@ function renderAll() {
     dRvp: buildRvpDelSection(rvp, gbc)
   };
   // Cards follow the order of your LM sheet.
-  const sections = [S.b2c, S.b2b, S.hvy, S.hapci, S.rvp, S.ret, S.dB2b, S.dHvy, S.dPre, S.dCod, S.dRvp].filter(Boolean);
+  const sections = [S.b2c, S.b2b, S.hvy, S.hapci, S.rvp, S.dB2b, S.dHvy, S.dPre, S.dCod, S.dRvp].filter(Boolean);
   // WW row keeps the original 9 percentages (no HAPCI / return).
   latestPct = [S.b2c, S.b2b, S.hvy, S.dB2b, S.dPre, S.dCod, S.dHvy, S.rvp, S.dRvp].map(s => s.pct);
 
@@ -659,6 +631,19 @@ const FE_GUESS = ['dn','fe','fename','feid','fecode','fu_name','employee','emplo
 const DWBN_GUESS = ['cs_dwbn','csdwbn','dwbn','dispatchid','runsheet','dispatch_id'].map(norm);
 const feClosed = new Set();
 const feNslOpen = new Set();
+// Personal notes per MWN (saved in this browser only, kept 45 days so a note follows the shipment into the next day's file).
+const NOTE_KEY = 'avtdNotes', NOTE_TTL = 45 * 86400000;
+const notes = (() => {
+  const out = Object.create(null);
+  try { const o = JSON.parse(store.get(NOTE_KEY, '{}')), now = Date.now(); for (const k in o) if (o[k] && o[k].n && now - o[k].t < NOTE_TTL) out[k] = o[k]; } catch (e) {}
+  return out;
+})();
+const noteOf = m => (notes[m] && notes[m].n) || '';
+function setNote(m, v) {
+  v = v.trim().slice(0, 300);
+  if (v) notes[m] = { n: v, t: Date.now() }; else delete notes[m];
+  store.set(NOTE_KEY, JSON.stringify(notes));
+}
 const cleanId = s => (s || '').trim().replace(/\.0+$/, '');
 const cmpPivot = (a, b) => {
   if (a === '(Unassigned)' || a === '(blank)') return 1;
@@ -746,6 +731,8 @@ function renderFe() {
         const btnN = el('button', 'piv-btn', isOpen ? '−' : '+');
         btnN.type = 'button';
         tdN.append(btnN, document.createTextNode(n.label));
+        const nNotes = n.mwns.filter(x => noteOf(x.mwn)).length;
+        if (nNotes) tdN.appendChild(el('span', 'note-dot', '\u{1F4DD} ' + nNotes));
         const tdNC = el('td', 'num');
         tdNC.appendChild(el('span', 'piv-cnt', String(n.count)));
         trN.append(tdN, tdNC);
@@ -756,13 +743,31 @@ function renderFe() {
           const trM = el('tr', 'piv-mwn');
           const tdM = el('td'); tdM.colSpan = 2;
           const box = el('div', 'mwn-box');
+          const refreshDot = () => {
+            const k = n.mwns.filter(x => noteOf(x.mwn)).length;
+            let dot = tdN.querySelector('.note-dot');
+            if (!k) { if (dot) dot.remove(); return; }
+            if (!dot) { dot = el('span', 'note-dot'); tdN.appendChild(dot); }
+            dot.textContent = '\u{1F4DD} ' + k;
+          };
           n.mwns.forEach(item => {
+            const line = el('div', 'mwn-line');
             const chip = el('button', 'mwn-chip');
             chip.type = 'button';
             chip.title = 'Click to copy MWN';
             chip.append(document.createTextNode(item.mwn), el('span', 'mwn-cl', item.cl));
             chip.onclick = e => { e.stopPropagation(); copyText(item.mwn, 'Copied MWN: ' + item.mwn); };
-            box.appendChild(chip);
+            const inp = el('input', 'mwn-note');
+            inp.type = 'text'; inp.placeholder = 'Add note / remarks...'; inp.maxLength = 300;
+            inp.autocomplete = 'off'; inp.enterKeyHint = 'done';
+            inp.setAttribute('aria-label', 'Note for ' + item.mwn);
+            inp.value = noteOf(item.mwn);
+            inp.onclick = e => e.stopPropagation();
+            inp.oninput = () => { setNote(item.mwn, inp.value); inp.classList.toggle('has', !!inp.value.trim()); refreshDot(); };
+            inp.onkeydown = e => { if (e.key === 'Enter') inp.blur(); };
+            inp.classList.toggle('has', !!inp.value.trim());
+            line.append(chip, inp);
+            box.appendChild(line);
           });
           const cp = el('button', 'mwn-copy', `Copy ${n.mwns.length} MWN${n.mwns.length > 1 ? 's' : ''}`);
           cp.type = 'button';
@@ -775,9 +780,25 @@ function renderFe() {
       });
     });
   });
+  syncFeToggle(data);
   const trTot = el('tr', 'piv-tot');
   trTot.append(el('td', '', 'Grand Total'), el('td', 'num', String(data.total)));
   tb.appendChild(trTot);
+}
+
+// One + / - button in the table header: "+" = something is collapsed (click shows every FE with all remarks), "-" = all open (click folds back to FE names only).
+const feAnyClosed = data => data.items.some(d => feClosed.has('dn:' + d.dn) || d.dwbns.some(w => feClosed.has('dw:' + d.dn + '|' + w.dwbn)));
+function syncFeToggle(data) {
+  const b = $('feToggle'); if (!b) return;
+  const anyClosed = feAnyClosed(data);
+  b.textContent = anyClosed ? '+' : '\u2212';
+  b.title = anyClosed ? 'Expand all FEs (show all remarks)' : 'Collapse all FEs (show names only)';
+}
+function feToggleAll() {
+  const cn = $('facilitySelect').value;
+  const data = cn ? buildFePivot(cn) : null;
+  if (!data || !data.items.length) return;
+  feAnyClosed(data) ? feExpandAll() : feCollapseAll();
 }
 
 function feExpandAll() { feClosed.clear(); renderFe(); }
@@ -788,6 +809,19 @@ function feCollapseAll() {
   feNslOpen.clear();
   data.items.forEach(d => feClosed.add('dn:' + d.dn));
   renderFe();
+}
+
+function copyNotes() {
+  const cn = $('facilitySelect').value;
+  const data = cn ? buildFePivot(cn) : null;
+  if (!data || !data.items.length) return toast('Nothing to copy yet.');
+  const lines = [['dn', 'cs_dwbn', 'NSL_REMARKS', 'MWN', 'Client', 'Note'].join('\t')];
+  data.items.forEach(d => d.dwbns.forEach(w => w.nsls.forEach(n => n.mwns.forEach(m => {
+    const t = noteOf(m.mwn);
+    if (t) lines.push([d.dn, w.dwbn, n.label, m.mwn, m.cl, t.replace(/[\t\r\n]+/g, ' ')].join('\t'));
+  }))));
+  if (lines.length === 1) return toast('No notes added yet.');
+  copyText(lines.join('\n'), `Copied ${lines.length - 1} note(s)`);
 }
 
 function copyFe() {
@@ -841,11 +875,11 @@ function copyWWRow() {
 
 // ---- Event wiring (no inline handlers, so the page runs under a strict CSP) ----
 const ACTIONS = {
-  pickFile: () => $('fileInput').click(), pickReturn: () => $('retInput').click(),
+  pickFile: () => $('fileInput').click(),
   render: () => renderAll(), hubs: () => populateFacilities(),
   whatsapp: () => copyWhatsApp(), copyAll: () => copyAll(), copyWW: () => copyWWRow(), copyReport: () => copyReport(),
-  feExpand: () => feExpandAll(), feCollapse: () => feCollapseAll(),
-  copyFe: () => copyFe(), goFix: () => showTab('fix'),
+  feExpand: () => feExpandAll(), feCollapse: () => feCollapseAll(), feToggle: () => feToggleAll(),
+  copyFe: () => copyFe(), copyNotes: () => copyNotes(), goFix: () => showTab('fix'),
   bulk: () => applyBulk(), clear: () => clearFixes(), saveFlags: () => saveFlags(), resetFlags: () => resetFlags()
 };
 document.querySelectorAll('[data-act]').forEach(e => {
